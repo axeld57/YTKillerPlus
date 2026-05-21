@@ -1,83 +1,89 @@
 name: Build and Release YTKillerPlus IPA
 
 on:
-  workflow_dispatch:
-    inputs:
-      ipa_url:
-        description: "Direct URL to decrypted YouTube IPA"
-        required: true
-      tweak_version:
-        description: "YTKillerPlus release tag (e.g. 5.4.1)"
-        required: true
-        default: "5.4.1"
-      bundle_id:
-        description: "Bundle ID"
-        required: true
-        default: "com.google.ios.youtube"
-      display_name:
-        description: "App display name"
-        required: true
-        default: "YouTube"
+ workflow_dispatch:
+   inputs:
+     ipa_url:
+       description: "Direct URL to decrypted YouTube IPA"
+       required: true
+     tweak_version:
+       description: "YTKillerPlus release tag (e.g. 5.4.1)"
+       required: true
+       default: "5.4.1"
+     bundle_id:
+       description: "Bundle ID"
+       required: true
+       default: "com.google.ios.youtube"
+     display_name:
+       description: "App display name"
+       required: true
+       default: "YouTube"
 
 jobs:
-  build:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+ build:
+   runs-on: macos-latest
+   steps:
+     - name: Checkout
+       uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          brew install dpkg ldid
+     - name: Install dependencies
+       run: |
+         brew install dpkg ldid
 
-      - name: Download decrypted IPA
-        run: |
-          curl -L "${{ github.event.inputs.ipa_url }}" -o YouTube.ipa
+     - name: Download decrypted IPA
+       run: |
+         curl -L "${{ github.event.inputs.ipa_url }}" -o YouTube.ipa
 
-      - name: Download YTKillerPlus deb
-        run: |
-          curl -L "https://github.com/iKarwan/YTKillerPlus/releases/download/${{ github.event.inputs.tweak_version }}/me.ikghd.ytkplus_${{ github.event.inputs.tweak_version }}_iphoneos-arm64.deb" -o tweak.deb
+     - name: Download YTKillerPlus deb
+       run: |
+         curl -L "https://repo.ikghd.me/Packages" -o RepoPackages.txt || \
+           (curl -L "https://repo.ikghd.me/Packages.bz2" -o RepoPackages.bz2 && bzip2 -d RepoPackages.bz2 && mv RepoPackages RepoPackages.txt)
+         DEB_PATH=$(grep -A 30 'Package: me.ikghd.ytkplus' RepoPackages.txt | grep '^Filename:' | head -1 | awk '{print $2}')
+         echo "Found deb at: $DEB_PATH"
+         curl -L --fail "https://repo.ikghd.me/$DEB_PATH" -o tweak.deb
+         dpkg-deb --info tweak.deb
 
-      - name: Inject tweak into IPA
-        run: |
-          mkdir -p work
-          unzip -q YouTube.ipa -d work
-          APP=$(ls work/Payload/)
-          APP_PATH="work/Payload/$APP"
+     - name: Inject tweak into IPA
+       run: |
+         mkdir -p work
+         unzip -q YouTube.ipa -d work
+         APP=$(ls work/Payload/)
+         APP_PATH="work/Payload/$APP"
+         BINARY=$(defaults read "$(pwd)/$APP_PATH/Info" CFBundleExecutable)
 
-          # Extract deb
-          mkdir -p tweak_extracted
-          dpkg-deb -x tweak.deb tweak_extracted
+         # Extract deb
+         mkdir -p tweak_extracted
+         dpkg-deb -x tweak.deb tweak_extracted
 
-          # Copy dylibs into app bundle
-          cp -r tweak_extracted/Library/MobileSubstrate/DynamicLibraries/. "$APP_PATH/"
+         # Copy dylibs into app bundle
+         cp -r tweak_extracted/Library/MobileSubstrate/DynamicLibraries/. "$APP_PATH/"
 
-          # Patch bundle ID if changed
-          if [ "${{ github.event.inputs.bundle_id }}" != "com.google.ios.youtube" ]; then
-            /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${{ github.event.inputs.bundle_id }}" "$APP_PATH/Info.plist"
-          fi
+         # Patch bundle ID if changed
+         if [ "${{ github.event.inputs.bundle_id }}" != "com.google.ios.youtube" ]; then
+           /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${{ github.event.inputs.bundle_id }}" "$APP_PATH/Info.plist"
+         fi
 
-          # Patch display name
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${{ github.event.inputs.display_name }}" "$APP_PATH/Info.plist"
+         # Patch display name
+         /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${{ github.event.inputs.display_name }}" "$APP_PATH/Info.plist"
 
-          # Re-sign
-          find "$APP_PATH" -name "*.dylib" -exec ldid -S {} \;
-          ldid -S "$APP_PATH/${{ env.APP_BINARY }}" || true
+         # Re-sign
+         find "$APP_PATH" -name "*.dylib" -exec ldid -S {} \;
+         ldid -S "$APP_PATH/$BINARY" || true
 
-          # Repack IPA
-          cd work && zip -qr ../YTKillerPlus.ipa Payload/
+         # Repack IPA
+         cd work && zip -qr ../YTKillerPlus.ipa Payload/
 
-      - name: Upload IPA as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: YTKillerPlus-${{ github.event.inputs.tweak_version }}
-          path: YTKillerPlus.ipa
+     - name: Upload IPA as artifact
+       uses: actions/upload-artifact@v4
+       with:
+         name: YTKillerPlus-${{ github.event.inputs.tweak_version }}
+         path: YTKillerPlus.ipa
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ github.event.inputs.tweak_version }}-${{ github.run_number }}
-          name: YTKillerPlus v${{ github.event.inputs.tweak_version }}
-          files: YTKillerPlus.ipa
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+     - name: Create GitHub Release
+       uses: softprops/action-gh-release@v2
+       with:
+         tag_name: v${{ github.event.inputs.tweak_version }}-${{ github.run_number }}
+         name: YTKillerPlus v${{ github.event.inputs.tweak_version }}
+         files: YTKillerPlus.ipa
+       env:
+         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
